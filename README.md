@@ -76,8 +76,10 @@ order when `ORBIT_ENV_FILE` is unset:
 ```
 
 The file holds the renderer's `DJI_KMS_*` knobs (connector, decoder, vsync,
-flip, crop, lens dewarp, colour grade, standby gate). See the file itself for
-the full annotated list.
+flip, crop, lens dewarp, colour grade). It also configures the **waiting
+screen** — `DJI_KMS_STANDBY` = a still image (`.png`/`.jpg`) or a looping clip
+(`.mp4`/`.mov`/`.mkv` or a raw `.h264` stream), shown whenever there is no live
+feed. See the file itself for the full annotated list.
 
 ## CLI
 
