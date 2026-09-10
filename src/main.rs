@@ -19,14 +19,21 @@ use capture::{on_stop, run_capture, Options};
 use common::{catch_signal, errno, install_worker_kick_handler, log, strerror, Fd};
 use gadget::{open_sink, FunctionFsGadget};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn usage() {
     eprint!(
-        r#"usage: orbit-rs [OUTPUT|stdout] [options]
+        r#"orbit-rs {VERSION} - DJI Goggles 3 / N3 / 2 USB (AOA) H.264 capture + renderer supervisor
+
+usage: orbit-rs [OUTPUT|stdout] [options]
 
   OUTPUT             file to write the H.264 elementary stream to.
                      'stdout' pipes it. With no OUTPUT, orbit-rs spawns a
                      renderer (ORBIT_RENDERER, default /usr/local/bin/orbit-kms
                      when /dev/dri exists) and feeds its stdin.
+
+  -h, --help         show this help, then exit
+  -V, --version      print the version, then exit
 
 Controller
   --udc NAME         device controller to bind; default is the board's
@@ -134,6 +141,9 @@ fn real_main() -> i32 {
         } else if a == "-h" || a == "--help" {
             usage();
             return 0;
+        } else if a == "-V" || a == "--version" {
+            println!("orbit-rs {}", VERSION);
+            return 0;
         } else if !a.is_empty() && a.starts_with('-') {
             usage();
             return 1;
@@ -143,6 +153,8 @@ fn real_main() -> i32 {
         }
         i += 1;
     }
+
+    log(format!("orbit-rs v{} (DJI goggles AOA capture)", VERSION));
 
     if list_udc {
         let udcs = FunctionFsGadget::list_udcs();
