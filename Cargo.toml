@@ -1,0 +1,18 @@
+[package]
+name = "orbit-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Capture the DJI Goggles 3 / N3 / 2 live H.264 stream over USB (Rust port)"
+license = "MIT"
+
+[[bin]]
+name = "orbit-rs"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
