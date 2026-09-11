@@ -11,7 +11,9 @@ use crate::common::log;
 
 /// Search order, first existing file wins:
 ///   $ORBIT_ENV_FILE                 explicit path ("none" or "" => skip loading)
-///   ./config/orbit.env
+///   /data/orbit/config/orbit.env    the appliance's real, live config
+///   /data/orbit/config/orbit-rs.env (what orbit-web writes to)
+///   ./config/orbit.env              dev convenience: repo checkout as CWD
 ///   ./config/orbit-rs.env
 ///   <exe dir>/config/orbit.env      (and orbit-rs.env)
 ///   <exe dir>/../config/orbit.env   (and orbit-rs.env)
@@ -94,6 +96,8 @@ pub fn load() {
 
 fn find_default() -> Option<PathBuf> {
     let mut cands = vec![
+        PathBuf::from("/data/orbit/config/orbit.env"),
+        PathBuf::from("/data/orbit/config/orbit-rs.env"),
         PathBuf::from("config/orbit.env"),
         PathBuf::from("config/orbit-rs.env"),
     ];

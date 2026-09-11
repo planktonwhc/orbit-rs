@@ -28,9 +28,38 @@ rustup target add aarch64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
+## Install (on the appliance) — [`install.sh`](install.sh)
+
+```sh
+sudo apt install -y cargo          # or rustup
+./install.sh
+```
+
+Builds `orbit-rs` and `orbit-net`, installs both to `/usr/local/bin`, seeds
+`/data/orbit/config/{orbit-rs.env,network.conf}` from the packaged defaults
+**without overwriting** files that already exist, installs the three systemd
+units below, and starts everything. Safe to re-run after `git pull` — it
+rebuilds and restarts either way.
+
+| unit | does |
+|---|---|
+| `orbit-net.service` | applies `network.conf` (AP/client Wi-Fi) |
+| `orbit-net.path` | re-applies it automatically whenever the file changes |
+| `orbit-rs.service` | capture → spawns the renderer |
+
+All three are `After=multi-user.target` (see [Boot ordering](#boot-ordering))
+so they never sit on the boot critical path.
+
+This installs the capture/network half only. The **renderer**
+([orbit-kms](https://github.com/planktonwhc/orbit-kms)) and the **settings
+panel** ([orbit-web](https://github.com/planktonwhc/orbit-web)) are separate
+repos with their own `install.sh` — `orbit-rs` needs `orbit-kms` on the box to
+actually show a picture.
+
 ## Run
 
-Must run as root (it mounts FunctionFS and writes configfs).
+Must run as root (it mounts FunctionFS and writes configfs). For a one-off or
+during development, run it directly instead of through `install.sh`:
 
 ```sh
 sudo ./target/release/orbit-rs
@@ -68,7 +97,9 @@ environment at startup; **variables already set are never overwritten**. Search
 order when `ORBIT_ENV_FILE` is unset:
 
 ```
-./config/orbit.env
+/data/orbit/config/orbit.env          the appliance's real, live config
+/data/orbit/config/orbit-rs.env       (what orbit-web writes to)
+./config/orbit.env                    dev convenience: repo checkout as CWD
 ./config/orbit-rs.env
 <exe dir>/config/orbit.env            (and orbit-rs.env)
 <exe dir>/../config/orbit.env         (and orbit-rs.env)
