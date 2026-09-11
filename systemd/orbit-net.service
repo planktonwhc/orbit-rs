@@ -2,7 +2,9 @@
 Description=Orbit network (Wi-Fi AP / client from network.conf)
 Documentation=https://github.com/planktonwhc/orbit-rs
 Wants=NetworkManager.service
-After=NetworkManager.service
+# Needs the NM daemon, NOT the network to be "online". Runs AFTER the system
+# has booted to multi-user so it never delays "multi-user.target reached".
+After=NetworkManager.service multi-user.target
 Before=orbit-rs.service
 
 [Service]
@@ -10,7 +12,9 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/orbit-net apply
 ExecReload=/usr/local/bin/orbit-net apply
-TimeoutStartSec=90
+# The profile is autoconnect=yes, so NetworkManager brings the link up itself
+# at boot; this reconcile is quick. Bounded well under nmcli's own -w timeout.
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target

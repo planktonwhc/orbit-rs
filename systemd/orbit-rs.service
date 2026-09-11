@@ -1,0 +1,23 @@
+[Unit]
+Description=Orbit stream appliance (DJI goggles AOA capture -> renderer)
+Documentation=https://github.com/planktonwhc/orbit-rs
+Wants=orbit-net.service
+# Start after the network is configured, and only once the system has finished
+# booting to multi-user -- keeps the appliance entirely off the boot critical
+# path. The renderer's standby image covers the first few seconds.
+After=orbit-net.service multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/orbit-rs
+# Capture mounts configfs/FunctionFS; the renderer needs DRM master.
+User=root
+Restart=always
+RestartSec=1
+Nice=-5
+# Default KillMode=control-group: on stop, both orbit-rs and its renderer child
+# get SIGTERM and shut down cleanly. orbit-rs also exits on its own when the
+# renderer exits, and Restart=always respawns the pair.
+
+[Install]
+WantedBy=multi-user.target

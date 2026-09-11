@@ -92,14 +92,38 @@ The appliance's Wi-Fi is driven by [`config/network.conf`](config/network.conf)
 | `client` | the Pi joins `CLIENT_SSID` as a station — for firmware-update checks and other internet needs. If the join fails, it falls back to `ap` so the box stays reachable. |
 
 ```sh
-sudo install -m755 scripts/orbit-net        /usr/local/bin/orbit-net
-sudo install -m644 systemd/orbit-net.service /etc/systemd/system/orbit-net.service
-sudo systemctl enable --now orbit-net        # applies MODE from network.conf at boot
+sudo install -m755 scripts/orbit-net          /usr/local/bin/orbit-net
+sudo install -m644 systemd/orbit-net.service   /etc/systemd/system/orbit-net.service
+sudo install -m644 systemd/orbit-rs.service    /etc/systemd/system/orbit-rs.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now orbit-net orbit-rs
 
 # switch at runtime
 sudo orbit-net client     # or: edit network.conf -> MODE=client, then `sudo orbit-net apply`
 sudo orbit-net ap
 sudo orbit-net status
+```
+
+### Boot ordering
+
+Both units are `After=multi-user.target` + `WantedBy=multi-user.target`, i.e.
+they start **after** the system has finished booting and never appear in
+`systemd-analyze critical-chain`. The AP profile is `autoconnect=yes`, so
+NetworkManager raises the link itself during its own startup (already on the
+boot path); `orbit-net.service` is then just a fast reconcile of
+`network.conf`. `orbit-rs.service` waits on `orbit-net.service`; the renderer's
+standby image covers the first seconds until the goggles feed arrives.
+
+Nothing here is ordered against `network-online.target` — `orbit-net`
+configures NetworkManager, it does not wait for connectivity.
+
+Trim the rest of the boot (optional, appliance images):
+
+```sh
+sudo systemctl disable --now NetworkManager-wait-online.service   # ~3 s, unused here
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
+sudo touch /etc/cloud/cloud-init.disabled                         # if cloud-init is present
+sudo systemctl mask e2scrub_reap.service dpkg-db-backup.timer
 ```
 
 ## CLI

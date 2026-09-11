@@ -53,6 +53,7 @@ fi
 MODE="${MODE:-ap}"
 WIFI_IFACE="${WIFI_IFACE:-wlan0}"
 COUNTRY="${COUNTRY:-}"
+NMW="${ORBIT_NET_WAIT:-25}"          # seconds nmcli waits for a connection to activate
 
 ACTION="${1:-apply}"
 case "$ACTION" in
@@ -100,10 +101,14 @@ ap_up() {
     nmcli con delete "$AP_CON" 2>/dev/null || true
 
     nmcli con add type wifi ifname "$WIFI_IFACE" con-name "$AP_CON" \
-        autoconnect no ssid "$AP_SSID" >/dev/null \
+        autoconnect yes ssid "$AP_SSID" >/dev/null \
         || die "could not create the AP connection"
 
+    # autoconnect + priority: NetworkManager itself brings the AP up at boot,
+    # so nothing extra sits on the boot critical path.
     nmcli con modify "$AP_CON" \
+        connection.autoconnect yes \
+        connection.autoconnect-priority 100 \
         802-11-wireless.mode ap \
         802-11-wireless.band "${AP_BAND:-bg}" \
         802-11-wireless.channel "${AP_CHANNEL:-6}" \
@@ -118,7 +123,7 @@ ap_up() {
         log "AP_PASSWORD is empty -> OPEN network"
     fi
 
-    nmcli con up "$AP_CON" || die "AP failed to come up"
+    nmcli -w "$NMW" con up "$AP_CON" || die "AP failed to come up"
     log "AP up: SSID '$AP_SSID' on $WIFI_IFACE @ ${AP_IP:-192.168.50.1/24} (DHCP via NetworkManager)"
 }
 
@@ -130,12 +135,12 @@ client_up() {
     nmcli con add type wifi ifname "$WIFI_IFACE" con-name "$CL_CON" \
         autoconnect yes ssid "$CLIENT_SSID" >/dev/null \
         || die "could not create the client connection"
-    nmcli con modify "$CL_CON" ipv4.method auto
+    nmcli con modify "$CL_CON" connection.autoconnect yes ipv4.method auto
     if [ -n "${CLIENT_PASSWORD:-}" ]; then
         nmcli con modify "$CL_CON" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$CLIENT_PASSWORD"
     fi
 
-    if nmcli con up "$CL_CON"; then
+    if nmcli -w "$NMW" con up "$CL_CON"; then
         log "client: joined '$CLIENT_SSID' on $WIFI_IFACE"
     else
         log "client join failed -> falling back to AP so the appliance stays reachable"
