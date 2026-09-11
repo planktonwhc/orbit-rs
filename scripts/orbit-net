@@ -38,7 +38,7 @@ COUNTRY=ID
 AP_SSID=OrbitFPV
 AP_PASSWORD=orbitfpv123
 AP_BAND=bg
-AP_CHANNEL=6
+AP_CHANNEL=auto
 AP_HIDDEN=0
 AP_IP=192.168.50.1/24
 CLIENT_SSID=
@@ -104,6 +104,15 @@ ap_up() {
         autoconnect yes ssid "$AP_SSID" >/dev/null \
         || die "could not create the AP connection"
 
+    # AP_CHANNEL=auto (or 0, or unset) -> nmcli channel 0, NetworkManager's own
+    # sentinel for "pick automatically at activation, based on the regulatory
+    # domain and a scan" -- not continuous ACS, just a one-time smarter choice
+    # than hardcoding a channel that might be crowded wherever the box lands.
+    ch="${AP_CHANNEL:-auto}"
+    case "$ch" in
+        auto|AUTO|Auto|"") ch=0; log "channel: auto (NetworkManager picks at activation)" ;;
+    esac
+
     # autoconnect + priority: NetworkManager itself brings the AP up at boot,
     # so nothing extra sits on the boot critical path.
     nmcli con modify "$AP_CON" \
@@ -111,7 +120,7 @@ ap_up() {
         connection.autoconnect-priority 100 \
         802-11-wireless.mode ap \
         802-11-wireless.band "${AP_BAND:-bg}" \
-        802-11-wireless.channel "${AP_CHANNEL:-6}" \
+        802-11-wireless.channel "$ch" \
         802-11-wireless.hidden "${AP_HIDDEN:-0}" \
         ipv4.method shared \
         ipv4.addresses "${AP_IP:-192.168.50.1/24}"
