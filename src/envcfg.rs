@@ -34,7 +34,10 @@ pub fn load() {
         }
         None => match find_default() {
             Some(p) => p,
-            None => return, // nothing to load, stay quiet
+            None => {
+                log("env file: none found (checked /data/orbit/config, ./config, <exe dir>/config, /etc/orbit-rs)");
+                return;
+            }
         },
     };
 
