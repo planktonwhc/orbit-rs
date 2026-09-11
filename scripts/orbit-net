@@ -104,15 +104,6 @@ ap_up() {
         autoconnect yes ssid "$AP_SSID" >/dev/null \
         || die "could not create the AP connection"
 
-    # AP_CHANNEL=auto (or 0, or unset) -> nmcli channel 0, NetworkManager's own
-    # sentinel for "pick automatically at activation, based on the regulatory
-    # domain and a scan" -- not continuous ACS, just a one-time smarter choice
-    # than hardcoding a channel that might be crowded wherever the box lands.
-    ch="${AP_CHANNEL:-auto}"
-    case "$ch" in
-        auto|AUTO|Auto|"") ch=0; log "channel: auto (NetworkManager picks at activation)" ;;
-    esac
-
     # autoconnect + priority: NetworkManager itself brings the AP up at boot,
     # so nothing extra sits on the boot critical path.
     nmcli con modify "$AP_CON" \
@@ -120,10 +111,26 @@ ap_up() {
         connection.autoconnect-priority 100 \
         802-11-wireless.mode ap \
         802-11-wireless.band "${AP_BAND:-bg}" \
-        802-11-wireless.channel "$ch" \
         802-11-wireless.hidden "${AP_HIDDEN:-0}" \
         ipv4.method shared \
         ipv4.addresses "${AP_IP:-192.168.50.1/24}"
+
+    # AP_CHANNEL=auto (or 0, or unset): leave 802-11-wireless.channel untouched
+    # (it stays at the connection's default = unset) so NetworkManager picks
+    # one itself at activation -- not continuous ACS, just a one-time smarter
+    # choice than hardcoding a channel that might be crowded wherever the box
+    # lands. nmcli rejects "0" as an explicit value, so this only works by
+    # never setting the property, not by setting it to a sentinel.
+    ch="${AP_CHANNEL:-auto}"
+    case "$ch" in
+        auto|AUTO|Auto|0|"")
+            log "channel: auto (NetworkManager picks at activation)"
+            ;;
+        *)
+            nmcli con modify "$AP_CON" 802-11-wireless.channel "$ch" \
+                || die "invalid AP_CHANNEL: $ch"
+            ;;
+    esac
 
     if [ -n "${AP_PASSWORD:-}" ]; then
         [ "${#AP_PASSWORD}" -ge 8 ] || die "AP_PASSWORD must be >= 8 characters (WPA2)"
