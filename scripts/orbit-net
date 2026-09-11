@@ -1,0 +1,151 @@
+#!/bin/sh
+# orbit-net -- bring the Wi-Fi interface up as an access point or as a client,
+# driven by a config file. Raspberry Pi OS Trixie (NetworkManager / nmcli).
+#
+#   orbit-net apply      apply MODE from the config file (default action)
+#   orbit-net ap         force AP mode this run
+#   orbit-net client     force client mode this run
+#   orbit-net down       drop both orbit connections
+#   orbit-net status     show the Wi-Fi device state
+#
+# Config (KEY=value shell syntax):  ${ORBIT_NET_CONF:-/data/orbit/config/network.conf}
+# A missing config file is seeded from the packaged default (or a built-in one).
+
+set -u
+
+CONF="${ORBIT_NET_CONF:-/data/orbit/config/network.conf}"
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+DEFAULT_CONF="$SELF_DIR/../config/network.conf"
+AP_CON="orbit-ap"
+CL_CON="orbit-client"
+
+log() { echo "[orbit-net] $*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+command -v nmcli >/dev/null 2>&1 || die "nmcli not found -- NetworkManager is required on Trixie"
+
+# --- config: seed if absent, then source ----------------------------------
+if [ ! -f "$CONF" ]; then
+    log "no $CONF -- seeding a default"
+    mkdir -p "$(dirname "$CONF")" 2>/dev/null || true
+    if [ -f "$DEFAULT_CONF" ]; then
+        cp "$DEFAULT_CONF" "$CONF"
+    else
+        cat > "$CONF" <<'EOF'
+MODE=ap
+WIFI_IFACE=wlan0
+COUNTRY=ID
+AP_SSID=OrbitFPV
+AP_PASSWORD=orbitfpv123
+AP_BAND=bg
+AP_CHANNEL=6
+AP_HIDDEN=0
+AP_IP=192.168.50.1/24
+CLIENT_SSID=
+CLIENT_PASSWORD=
+EOF
+    fi
+fi
+
+# shellcheck disable=SC1090
+. "$CONF"
+
+MODE="${MODE:-ap}"
+WIFI_IFACE="${WIFI_IFACE:-wlan0}"
+COUNTRY="${COUNTRY:-}"
+
+ACTION="${1:-apply}"
+case "$ACTION" in
+    ap)          MODE=ap ;;
+    client|sta)  MODE=client ;;
+    apply)       ;;
+    down)
+        nmcli con down "$AP_CON" 2>/dev/null || true
+        nmcli con down "$CL_CON" 2>/dev/null || true
+        log "both orbit connections down"
+        exit 0
+        ;;
+    status)
+        nmcli -f GENERAL.DEVICE,GENERAL.STATE,GENERAL.CONNECTION device show "$WIFI_IFACE" 2>/dev/null || true
+        nmcli -f NAME,DEVICE,STATE con show --active 2>/dev/null || true
+        exit 0
+        ;;
+    -h|--help)
+        sed -n '2,15p' "$0"
+        exit 0
+        ;;
+    *)
+        die "usage: orbit-net [apply|ap|client|down|status]"
+        ;;
+esac
+
+[ "$(id -u)" -eq 0 ] || die "must run as root"
+
+nmcli radio wifi on >/dev/null 2>&1 || true
+[ -n "$COUNTRY" ] && { iw reg set "$COUNTRY" 2>/dev/null || true; }
+
+# Release the interface from any other active Wi-Fi connection so ours can own it.
+nmcli -t -f NAME,DEVICE,TYPE con show --active 2>/dev/null | while IFS=: read -r name dev typ; do
+    [ "$typ" = "802-11-wireless" ] || continue
+    [ "$dev" = "$WIFI_IFACE" ] || continue
+    case "$name" in
+        "$AP_CON"|"$CL_CON") ;;
+        *) log "releasing $WIFI_IFACE from '$name'"; nmcli con down "$name" 2>/dev/null || true ;;
+    esac
+done
+
+ap_up() {
+    [ -n "${AP_SSID:-}" ] || die "AP_SSID is not set in $CONF"
+    nmcli con down "$CL_CON" 2>/dev/null || true
+    nmcli con delete "$AP_CON" 2>/dev/null || true
+
+    nmcli con add type wifi ifname "$WIFI_IFACE" con-name "$AP_CON" \
+        autoconnect no ssid "$AP_SSID" >/dev/null \
+        || die "could not create the AP connection"
+
+    nmcli con modify "$AP_CON" \
+        802-11-wireless.mode ap \
+        802-11-wireless.band "${AP_BAND:-bg}" \
+        802-11-wireless.channel "${AP_CHANNEL:-6}" \
+        802-11-wireless.hidden "${AP_HIDDEN:-0}" \
+        ipv4.method shared \
+        ipv4.addresses "${AP_IP:-192.168.50.1/24}"
+
+    if [ -n "${AP_PASSWORD:-}" ]; then
+        [ "${#AP_PASSWORD}" -ge 8 ] || die "AP_PASSWORD must be >= 8 characters (WPA2)"
+        nmcli con modify "$AP_CON" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$AP_PASSWORD"
+    else
+        log "AP_PASSWORD is empty -> OPEN network"
+    fi
+
+    nmcli con up "$AP_CON" || die "AP failed to come up"
+    log "AP up: SSID '$AP_SSID' on $WIFI_IFACE @ ${AP_IP:-192.168.50.1/24} (DHCP via NetworkManager)"
+}
+
+client_up() {
+    [ -n "${CLIENT_SSID:-}" ] || die "CLIENT_SSID is not set in $CONF (needed for MODE=client)"
+    nmcli con down "$AP_CON" 2>/dev/null || true
+    nmcli con delete "$CL_CON" 2>/dev/null || true
+
+    nmcli con add type wifi ifname "$WIFI_IFACE" con-name "$CL_CON" \
+        autoconnect yes ssid "$CLIENT_SSID" >/dev/null \
+        || die "could not create the client connection"
+    nmcli con modify "$CL_CON" ipv4.method auto
+    if [ -n "${CLIENT_PASSWORD:-}" ]; then
+        nmcli con modify "$CL_CON" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$CLIENT_PASSWORD"
+    fi
+
+    if nmcli con up "$CL_CON"; then
+        log "client: joined '$CLIENT_SSID' on $WIFI_IFACE"
+    else
+        log "client join failed -> falling back to AP so the appliance stays reachable"
+        nmcli con delete "$CL_CON" 2>/dev/null || true
+        ap_up
+    fi
+}
+
+case "$MODE" in
+    ap)          ap_up ;;
+    client|sta)  client_up ;;
+    *)           die "MODE must be 'ap' or 'client' (got '$MODE')" ;;
+esac

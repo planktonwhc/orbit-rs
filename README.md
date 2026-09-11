@@ -81,6 +81,27 @@ screen** — `DJI_KMS_STANDBY` = a still image (`.png`/`.jpg`) or a looping clip
 (`.mp4`/`.mov`/`.mkv` or a raw `.h264` stream), shown whenever there is no live
 feed. See the file itself for the full annotated list.
 
+## Network — [`scripts/orbit-net`](scripts/orbit-net)
+
+The appliance's Wi-Fi is driven by [`config/network.conf`](config/network.conf)
+(installed at `/data/orbit/config/network.conf`) through NetworkManager:
+
+| `MODE` | what happens |
+|---|---|
+| `ap` *(default)* | the Pi is a hotspot (`AP_SSID` / `AP_PASSWORD` / `AP_CHANNEL` / `AP_IP`). Connect a phone to it to reach the appliance and edit `orbit-rs.env`. NetworkManager runs DHCP; clients also get internet if the Pi has it on `eth0`. |
+| `client` | the Pi joins `CLIENT_SSID` as a station — for firmware-update checks and other internet needs. If the join fails, it falls back to `ap` so the box stays reachable. |
+
+```sh
+sudo install -m755 scripts/orbit-net        /usr/local/bin/orbit-net
+sudo install -m644 systemd/orbit-net.service /etc/systemd/system/orbit-net.service
+sudo systemctl enable --now orbit-net        # applies MODE from network.conf at boot
+
+# switch at runtime
+sudo orbit-net client     # or: edit network.conf -> MODE=client, then `sudo orbit-net apply`
+sudo orbit-net ap
+sudo orbit-net status
+```
+
 ## CLI
 
 ```

@@ -1,0 +1,16 @@
+[Unit]
+Description=Orbit network (Wi-Fi AP / client from network.conf)
+Documentation=https://github.com/planktonwhc/orbit-rs
+Wants=NetworkManager.service
+After=NetworkManager.service
+Before=orbit-rs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/orbit-net apply
+ExecReload=/usr/local/bin/orbit-net apply
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target
