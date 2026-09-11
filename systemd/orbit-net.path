@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-apply orbit network when network.conf changes
+Documentation=https://github.com/planktonwhc/orbit-rs
+
+[Path]
+# Fires when the file is written and closed. Re-runs orbit-net.service, which
+# rebuilds the NetworkManager profile from the new values (connected clients
+# are dropped and must reconnect).
+PathChanged=/data/orbit/config/network.conf
+Unit=orbit-net.service
+
+[Install]
+WantedBy=multi-user.target

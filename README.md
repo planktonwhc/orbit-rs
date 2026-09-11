@@ -94,15 +94,25 @@ The appliance's Wi-Fi is driven by [`config/network.conf`](config/network.conf)
 ```sh
 sudo install -m755 scripts/orbit-net          /usr/local/bin/orbit-net
 sudo install -m644 systemd/orbit-net.service   /etc/systemd/system/orbit-net.service
+sudo install -m644 systemd/orbit-net.path      /etc/systemd/system/orbit-net.path
 sudo install -m644 systemd/orbit-rs.service    /etc/systemd/system/orbit-rs.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now orbit-net orbit-rs
+sudo systemctl enable --now orbit-net orbit-net.path orbit-rs
 
 # switch at runtime
 sudo orbit-net client     # or: edit network.conf -> MODE=client, then `sudo orbit-net apply`
 sudo orbit-net ap
 sudo orbit-net status
 ```
+
+`network.conf` is **not** watched by default — after editing it, run
+`sudo orbit-net apply` (or `sudo systemctl reload orbit-net`). Enabling
+`orbit-net.path` (above) makes systemd re-apply automatically on every save;
+either way, a changed SSID/password rebuilds the NetworkManager profile and
+drops connected clients until they reconnect.
+
+`config/orbit-rs.env` is read once at `orbit-rs` startup — after editing it,
+`sudo systemctl restart orbit-rs` (the standby image covers the blip).
 
 ### Boot ordering
 
