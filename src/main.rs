@@ -1,5 +1,9 @@
 //! orbit-rs -- capture the live 1080p H.264 stream from DJI Goggles 3 / N3 / 2
-//! over USB (AOA), and hand it to a renderer.
+//! over USB, and hand it to a renderer. Two capture modes, picked by
+//! `ORBIT_MODE` (see [`Mode`]): the default `aoa` (USB-C gadget/cable link,
+//! this board as the emulated accessory) and `goggles-net` (regular USB
+//! port, "Liveview sharing", this board as a plain RNDIS network client --
+//! see `goggles_net/mod.rs`). Both feed the same sink-selection code below.
 //!
 //! A bare `orbit-rs` run captures and spawns the renderer itself (orbit-kms by
 //! default), piping the elementary stream into its stdin -- the renderer
@@ -10,6 +14,7 @@ mod capture;
 mod common;
 mod envcfg;
 mod gadget;
+mod goggles_net;
 
 use std::os::unix::io::IntoRawFd;
 use std::path::Path;
@@ -21,9 +26,34 @@ use gadget::{open_sink, FunctionFsGadget};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Which transport captures the video -- `ORBIT_MODE`, mirroring the
+/// reference appliance's own `op_mode` config key (see
+/// `references/dji-rs-flow.md`'s "Porting goggles-net into orbit-rs as a
+/// mode" section): a plain config value picked once at startup, not a
+/// second process spawned and piped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// USB-C gadget/cable link: this board emulates the DJI AOA accessory,
+    /// the goggles are the USB host. `capture.rs` + `gadget.rs`.
+    Aoa,
+    /// Regular (non-OTG) USB port, "Liveview sharing" turned on: the
+    /// goggles enumerate as an RNDIS network device, this board is a plain
+    /// UDP client. `goggles_net/`.
+    GogglesNet,
+}
+
+fn mode_from_env() -> Result<Mode, String> {
+    match std::env::var("ORBIT_MODE") {
+        Err(_) => Ok(Mode::Aoa),
+        Ok(v) if v.trim().is_empty() || v.trim() == "aoa" => Ok(Mode::Aoa),
+        Ok(v) if v.trim() == "goggles-net" => Ok(Mode::GogglesNet),
+        Ok(v) => Err(format!("ORBIT_MODE={v:?} not understood (expected 'aoa' or 'goggles-net')")),
+    }
+}
+
 fn usage() {
     eprint!(
-        r#"orbit-rs {VERSION} - DJI Goggles 3 / N3 / 2 USB (AOA) H.264 capture + renderer supervisor
+        r#"orbit-rs {VERSION} - DJI Goggles 3 / N3 / 2 USB H.264 capture + renderer supervisor
 
 usage: orbit-rs [OUTPUT|stdout] [options]
 
@@ -35,22 +65,45 @@ usage: orbit-rs [OUTPUT|stdout] [options]
   -h, --help         show this help, then exit
   -V, --version      print the version, then exit
 
-Controller
+Mode (ORBIT_MODE=aoa|goggles-net, default aoa)
+  aoa                USB-C gadget/cable link (default) -- this board emulates
+                     the DJI AOA accessory; goggles are the USB host.
+  goggles-net        regular USB port, "Liveview sharing" -- goggles enumerate
+                     as an RNDIS network device; this board is a UDP client.
+
+Controller (aoa mode)
   --udc NAME         device controller to bind; default is the board's
                      only one. --list-udc shows what this board has.
   --list-udc         list the device controllers, then exit
 
-Self-composed gadget (default)
+Self-composed gadget (aoa mode, default)
   --gadget NAME      configfs gadget + FunctionFS instance name (default 'goggles')
   --mount PATH       where to mount FunctionFS (default /dev/ffs-<NAME>)
   --cleanup          remove a gadget left behind by a killed run, then exit
 
-Attach to a gadget composed elsewhere
+Attach to a gadget composed elsewhere (aoa mode)
   --ffs PATH         FunctionFS is already mounted here; leave configfs alone
   --gadget-dir DIR   with --ffs: bind and unbind this configfs gadget
                      around the run. Omit it to leave the UDC alone too.
 
+RNDIS interface (goggles-net mode)
+  --iface NAME       RNDIS interface (env GOGGLES_NET_IFACE; default:
+                     auto-detect the USB parent with idVendor:idProduct
+                     2ca3:0020)
+  --peer IP:PORT     goggles' UDP endpoint (env GOGGLES_NET_PEER; default
+                     192.168.60.2:9003)
+  --ip ADDR/CIDR     our address on the link (default 192.168.60.1/24)
+  --wait SECS        how long to wait for the interface to enumerate (default 30)
+
+Session (goggles-net mode)
+  --probe            stop after the opener ACK, don't read video
+  --hex-rx           log every post-handshake datagram as hex on stderr
+  --handshake-ms N   opener ACK timeout in milliseconds (default 5000)
+  --dump PATH        also tee raw UDP payloads to a file (independent of the
+                     reassembled OUTPUT -- for offline analysis)
+
 Environment
+  ORBIT_MODE         aoa (default) | goggles-net -- see Mode above.
   ORBIT_RENDERER     renderer command (whitespace-split). 'none'/'off'/'' -> just
                      write the default file. Unset -> /usr/local/bin/orbit-kms
                      if /dev/dri/card0|card1 exists, else the default file.
@@ -108,10 +161,19 @@ fn open_file_sink(out_path: &str) -> Result<Fd, ()> {
 }
 
 fn real_main() -> i32 {
+    let mode = match mode_from_env() {
+        Ok(m) => m,
+        Err(e) => {
+            log(e);
+            return 1;
+        }
+    };
+
     let args: Vec<String> = std::env::args().collect();
     let mut out_path = "./goggles_feed.h264".to_string();
     let mut out_path_given = false;
     let mut opt = Options::default();
+    let mut gn_opt = goggles_net::Opts::default();
     let mut cleanup = false;
     let mut list_udc = false;
 
@@ -138,6 +200,46 @@ fn real_main() -> i32 {
         } else if a == "--gadget-dir" && has_value {
             i += 1;
             opt.gadget_dir = args[i].clone();
+        } else if a == "--iface" && has_value {
+            i += 1;
+            gn_opt.iface = Some(args[i].clone());
+        } else if a == "--peer" && has_value {
+            i += 1;
+            match args[i].parse() {
+                Ok(peer) => gn_opt.peer = peer,
+                Err(e) => {
+                    log(format!("bad --peer '{}': {e}", args[i]));
+                    return 1;
+                }
+            }
+        } else if a == "--ip" && has_value {
+            i += 1;
+            gn_opt.ip = args[i].clone();
+        } else if a == "--wait" && has_value {
+            i += 1;
+            match args[i].parse::<u64>() {
+                Ok(secs) => gn_opt.wait_iface = std::time::Duration::from_secs(secs),
+                Err(_) => {
+                    log(format!("bad --wait '{}' (expected a number of seconds)", args[i]));
+                    return 1;
+                }
+            }
+        } else if a == "--probe" {
+            gn_opt.probe_only = true;
+        } else if a == "--hex-rx" {
+            gn_opt.hex_rx = true;
+        } else if a == "--handshake-ms" && has_value {
+            i += 1;
+            match args[i].parse::<u64>() {
+                Ok(ms) => gn_opt.handshake_timeout = std::time::Duration::from_millis(ms),
+                Err(_) => {
+                    log(format!("bad --handshake-ms '{}'", args[i]));
+                    return 1;
+                }
+            }
+        } else if a == "--dump" && has_value {
+            i += 1;
+            gn_opt.dump = Some(std::path::PathBuf::from(args[i].clone()));
         } else if a == "-h" || a == "--help" {
             usage();
             return 0;
@@ -154,7 +256,11 @@ fn real_main() -> i32 {
         i += 1;
     }
 
-    log(format!("orbit-rs v{} (DJI goggles AOA capture)", VERSION));
+    let mode_label = match mode {
+        Mode::Aoa => "AOA capture",
+        Mode::GogglesNet => "goggles-net capture",
+    };
+    log(format!("orbit-rs v{} (DJI goggles {})", VERSION, mode_label));
 
     if list_udc {
         let udcs = FunctionFsGadget::list_udcs();
@@ -243,9 +349,18 @@ fn real_main() -> i32 {
     install_worker_kick_handler();
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) }; // downstream pipe may close first
 
-    // run_capture consumes `sink` and drops it on return, so the renderer sees
-    // EOF on its stdin and shuts itself down; then we reap it.
-    let rc = run_capture(sink, &sink_label, &opt);
+    // Both modes consume `sink` and drop it on return, so the renderer sees
+    // EOF on its stdin and shuts itself down either way; then we reap it.
+    let rc = match mode {
+        Mode::Aoa => run_capture(sink, &sink_label, &opt),
+        Mode::GogglesNet => match goggles_net::run(sink, &sink_label, &gn_opt) {
+            Ok(()) => 0,
+            Err(e) => {
+                log(format!("goggles-net: {e}"));
+                1
+            }
+        },
+    };
 
     if let Some(mut c) = renderer_child {
         match c.wait() {
