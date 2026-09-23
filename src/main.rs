@@ -161,6 +161,16 @@ fn open_file_sink(out_path: &str) -> Result<Fd, ()> {
 }
 
 fn real_main() -> i32 {
+    // Fold config/orbit.env into the environment first, before anything reads
+    // ORBIT_MODE or builds an Opts::default() (goggles_net::Opts::default()
+    // reads GOGGLES_NET_IFACE/GOGGLES_NET_PEER from the environment right
+    // away) -- otherwise a value set only in the config file, never as a
+    // real shell/systemd env var, would be invisible to code that runs
+    // before this, silently ignored rather than applied. Safe to run this
+    // early: it only depends on ORBIT_ENV_FILE and fixed filesystem paths,
+    // nothing computed from CLI args.
+    envcfg::load();
+
     let mode = match mode_from_env() {
         Ok(m) => m,
         Err(e) => {
@@ -300,10 +310,6 @@ fn real_main() -> i32 {
             1
         };
     }
-
-    // Fold config/orbit.env into the environment before we spawn anything, so a
-    // renderer child inherits it. Anything already set is left untouched.
-    envcfg::load();
 
     // Decide where the elementary stream goes.
     let mut renderer_child: Option<Child> = None;
